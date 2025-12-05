@@ -1,52 +1,46 @@
-from zerobouncesdk import ZeroBounce, ZBException
-import os
+from config.gemini_config import gemini_model
 from config.dbConfig import db
 from datetime import datetime
-from flask import jsonify
-from werkzeug.exceptions import HTTPException
-from dotenv import load_dotenv
+import json
 
-API_KEY = os.getenv("ZERO_BOUNCE_KEY")
-zero_bounce = ZeroBounce(API_KEY)
-
-load_dotenv()
 error_collection = db["errors"]
 
-def handle_exception(e):
-    if isinstance(e, HTTPException):
+def suspicious_email_check(email_body, sender_email):
+    """
+    Uses Gemini to analyze email context for phishing or malicious intent.
+    This replaces the simple ZeroBounce check with semantic analysis.
+    """
+    try:
+        prompt = f"""
+        Analyze this email for suspicious activity (phishing, scams, malicious links).
+        
+        Sender: {sender_email}
+        Body: "{email_body[:1000]}"
+
+        Return JSON:
+        {{
+            "is_safe": true/false,
+            "reason": "Short explanation"
+        }}
+        """
+        
+        response = gemini_model.generate_content(prompt)
+        text = response.text.replace("```json", "").replace("```", "").strip()
+        result = json.loads(text)
+        
+        is_safe = result.get("is_safe", False)
+        reason = result.get("reason", "Unknown")
+        
+        return is_safe, reason if not is_safe else "Safe"
+        
+    except Exception as e:
+        print(f"Security Check Error: {e}")
+        # Log error but fail open (allow email) or closed depending on preference
         error_data = {
-            "errorMessage": e.description,
-            "type": "Customer",
-            "severity": "Low" if e.code == 400 else "Medium",
+            "errorMessage": f"AI Security Check Failed: {str(e)}",
+            "type": "System",
+            "severity": "Medium",
             "timestamp": datetime.utcnow()
         }
         error_collection.insert_one(error_data)
-        return jsonify({"error": e.description}), e.code
-
-    error_data = {
-        "errorMessage": str(e),
-        "type": "Customer",
-        "severity": "Critical",
-        "timestamp": datetime.utcnow()
-    }
-
-    error_collection.insert_one(error_data)
-    return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
-
-def suspicious_email_check(email):
-    try:
-        response = zero_bounce.validate(email, '127.0.0.1')
-        response = response.__dict__
-
-        is_valid = str(response['status']).split(".")[-1].lower() == 'valid'
-
-        suspicious_keywords = ["disposable", "role_based", "toxic", "spamtrap"]
-        sub_status = str(response.get('sub_status', '')).split(".")[-1].lower()
-
-        is_suspicious = any(keyword in sub_status for keyword in suspicious_keywords)
-
-        return is_valid, "Suspicious" if is_suspicious else "Safe"
-
-    except ZBException as e:
-        print("ZeroBounce validate error: " + str(e))
-        return handle_exception(e)
+        return True, "AI Check Failed (Default Safe)"

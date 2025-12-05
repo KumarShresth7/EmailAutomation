@@ -21,7 +21,7 @@ chat_history_collection = db["chat_history"]
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"D:\Deloitte\Prototype\server\services\fresh-airfoil-445517-q1-4e804f7d94e2.json"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"D:\Deloitte\Prototype\server\services\fresh-airfoil-445517-q1-89b2bc080318.json"
 aiplatform.init(project=PROJECT_ID, location="us-central1")
 embeddings = VertexAIEmbeddings(model="text-embedding-004", project=PROJECT_ID)
 

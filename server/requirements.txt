@@ -1,29 +1,29 @@
+# Core Framework
 flask
-watchdog
-openpyxl
-ai21
+flask-cors
 python-dotenv
-pymongo
-fpdf
-zerobouncesdk
-google-genai
-pandas
-langchain
-langchain-community
-langchain_chroma
-python-Levenshtein
-langchain_google_vertexai
-pypdf
-Flask-Cors
-PyMuPDF
-easyocr
-fitz
+apscheduler
 waitress
 gunicorn
+
+# Database
+pymongo
+
+# AI & LLM (Gemini + LangChain)
 google-generativeai
-gspread
-oauth2client
-google-api-python-client
-google-auth-httplib2
-google-auth-oauthlib
+langchain
+langchain-community
+langchain-google-genai
+langchain-chroma
+
+# Email & File Processing
 stripe
+fpdf
+pandas
+openpyxl
+pymupdf
+easyocr
+
+# Utilities
+requests
+python-Levenshtein

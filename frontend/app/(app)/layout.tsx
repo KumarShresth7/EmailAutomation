@@ -1,18 +1,17 @@
-'use client'
-import dynamic from "next/dynamic";
-const Sidebar = dynamic(() => import("@/components/Sidebar"));
+import Sidebar from '@/components/Sidebar';
 
-export default function AppLayout({
-    children,
-}: Readonly<{
-    children: React.ReactNode;
-}>) {
-    return (
-        <div className="flex h-screen overflow-hidden bg-black w-full">
-            <Sidebar />
-            <main className="flex-1 overflow-y-auto">
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-muted/30 dark:bg-background">
+      <Sidebar />
+      <div className="p-4 sm:ml-64">
+        <main className="mx-auto max-w-7xl pt-6">
+            {/* Fade-in animation for page content */}
+            <div className="animate-in fade-in-0 slide-in-from-bottom-3 duration-500">
                 {children}
-            </main>
-        </div>
-    );
+            </div>
+        </main>
+      </div>
+    </div>
+  );
 }

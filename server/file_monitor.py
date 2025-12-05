@@ -1,154 +1,155 @@
 import time
-import openpyxl
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+import imaplib
+import email
+from email.header import decode_header
 import os
-import json
-from datetime import datetime, timedelta
-from order_handling import process_order_details, process_order_change
+import sys
+import threading
+from datetime import datetime
+from dotenv import load_dotenv
+import shutil
+
+# Add server directory to path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from email_config.emailContentExtract import extract_email_details
+from order_handling import process_order_details, process_order_change
 from email_config.email_check import suspicious_email_check
 from email_config.email_classification import classify_email
 from feedback.feedback_handle import process_complaint
 from file_processing import process_attachment
 
-excel_file_path = os.path.abspath(r'C:\Users\vedan\Downloads\EmailAutomation\server\Sample.xlsx')
-directory_to_watch = os.path.dirname(excel_file_path)
+load_dotenv()
 
-previous_content = []
+EMAIL_USER = os.getenv("SENDER_EMAIL")
+EMAIL_PASS = os.getenv("SENDER_PASSWORD")
+IMAP_SERVER = "imap.gmail.com"
+ATTACHMENT_DIR = "attachments"
 
-def read_excel_file():
-    content = []
+if not os.path.exists(ATTACHMENT_DIR):
+    os.makedirs(ATTACHMENT_DIR)
+
+def clean_text(text):
+    return "".join(c for c in text if c.isprintable())
+
+def get_email_body(msg):
+    if msg.is_multipart():
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            content_disposition = str(part.get("Content-Disposition"))
+            if content_type == "text/plain" and "attachment" not in content_disposition:
+                return part.get_payload(decode=True).decode()
+    else:
+        return msg.get_payload(decode=True).decode()
+    return ""
+
+def process_new_emails():
     try:
-        wb = openpyxl.load_workbook(excel_file_path)
-        sheet = wb.active
+        # Connect to IMAP
+        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+        mail.login(EMAIL_USER, EMAIL_PASS)
+        mail.select("inbox")
 
-        headers = [cell.value for cell in sheet[1]]
-        
-        for row in sheet.iter_rows(min_row=2, values_only=True):
-            if isinstance(row, tuple):
-                if all(cell is None or cell == '' for cell in row):
-                    continue
-                
-                email_data = dict(zip(headers, row)) 
-                content.append(email_data)
-        return content
+        # Search for all Unseen emails
+        status, messages = mail.search(None, 'UNSEEN')
+        email_ids = messages[0].split()
+
+        if email_ids:
+            print(f"\n[IMAP] Found {len(email_ids)} new emails. Processing...")
+
+        for email_id in email_ids:
+            try:
+                # Fetch the email
+                res, msg_data = mail.fetch(email_id, "(RFC822)")
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        msg = email.message_from_bytes(response_part[1])
+                        
+                        # Decode Subject
+                        subject, encoding = decode_header(msg["Subject"])[0]
+                        if isinstance(subject, bytes):
+                            subject = subject.decode(encoding if encoding else "utf-8")
+                        
+                        # Decode Sender
+                        from_ = msg.get("From")
+                        print(f"\n[Processing] From: {from_} | Subject: {subject}")
+
+                        # Get Body
+                        body = get_email_body(msg)
+                        if not body: 
+                            print("  -> Skipping: Empty body")
+                            continue
+
+                        # Handle Attachments
+                        attachment_path = None
+                        for part in msg.walk():
+                            if part.get_content_maintype() == 'multipart':
+                                continue
+                            if part.get('Content-Disposition') is None:
+                                continue
+                                
+                            filename = part.get_filename()
+                            if filename:
+                                filepath = os.path.join(ATTACHMENT_DIR, clean_text(filename))
+                                with open(filepath, 'wb') as f:
+                                    f.write(part.get_payload(decode=True))
+                                attachment_path = filepath
+                                print(f"  -> Attachment saved: {filename}")
+
+                        # 1. Suspicious Check (Gemini) [PDF Flow]
+                        print("  -> Running Suspicious Check...")
+                        is_safe, status_msg = suspicious_email_check(body, from_)
+                        
+                        if not is_safe:
+                            print(f"  -> 🛑 DISCARDED: {status_msg}")
+                            # Optionally move to Trash here
+                            continue
+
+                        # 2. Classification (Gemini)
+                        print("  -> Classifying Email...")
+                        email_type, status_code = classify_email(body)
+                        print(f"  -> Type: {email_type}")
+
+                        date = datetime.now().strftime("%Y-%m-%d")
+                        time_str = datetime.now().strftime("%H:%M:%S")
+
+                        # 3. Routing Logic
+                        if attachment_path:
+                            # Handle attachment-based orders (OCR path from PDF)
+                            print("  -> Processing Attachment via OCR...")
+                            structured_data = process_attachment(attachment_path, body, from_, date, time_str)
+                            if structured_data and structured_data.get('orders'):
+                                process_order_details(from_, date, time_str, structured_data)
+                        
+                        elif email_type == "New Order":
+                            print("  -> Extracting New Order Details...")
+                            order_details = extract_email_details(body)
+                            if order_details:
+                                process_order_details(from_, date, time_str, order_details)
+                                
+                        elif email_type == "Update Order":
+                            print("  -> Processing Order Update...")
+                            order_details = extract_email_details(body)
+                            if order_details:
+                                process_order_change(from_, date, time_str, order_details)
+                                
+                        elif email_type == "Feedback":
+                            print("  -> Processing Feedback...")
+                            process_complaint(from_, body, date, time_str)
+                        
+                        else:
+                            print(f"  -> Unhandled category: {email_type}")
+            except Exception as e:
+                print(f"Error processing individual email {email_id}: {e}")
+
+        mail.close()
+        mail.logout()
 
     except Exception as e:
-        print(f"Error reading the Excel file: {e}")
-
-def compare_changes(new_content):
-    global previous_content
-    changes = []
-    base_timestamp = datetime.now()
-    prev_content_tuples = [tuple(row.items()) for row in previous_content if isinstance(row, dict)]
-    
-    for index, row in enumerate(new_content):
-        if not isinstance(row, dict):
-            continue  
-        row_tuple = tuple(row.items())
-        if row_tuple not in prev_content_tuples:
-            row_with_timestamp = row.copy()
-            current_time = base_timestamp + timedelta(seconds=index)
-            row_with_timestamp['Date'] = current_time.strftime("%Y-%m-%d")
-            row_with_timestamp['Time'] = current_time.strftime("%H:%M:%S")
-            changes.append(row_with_timestamp)
-    
-    previous_content = new_content.copy()
-    return changes
-
-def handle_modified_file():
-    new_content = read_excel_file()
-    
-    if not new_content:
-        return
-    
-    changes = compare_changes(new_content)
-    changes_file = "changes.json"
-    
-    try:
-        if changes:
-            with open(changes_file, 'w') as f:
-                json.dump(changes, f, indent=4)
-            
-            for change in changes:
-                email = change.get("Email")
-                body = change.get("Body")
-                date = change.get('Date')
-                time = change.get('Time')
-                attachment_path = change.get('Attachment')
-                
-                email_status = suspicious_email_check(email)
-                is_valid, status = email_status
-                
-                if is_valid:
-                    structured_data = None
-                    if attachment_path and os.path.exists(attachment_path):
-                        print(f"Processing email with attachment: {attachment_path}")
-                        structured_data = process_attachment(attachment_path, body, email, date, time)
-                    
-                    if structured_data and structured_data.get('orders'):
-                        print("Successfully extracted order details from combined email and attachment")
-                        process_order_details(email, date, time, structured_data)
-                    else:
-                        print("No valid structured data from attachment, processing email body only")
-                        email_type, email_type_status = classify_email(body)
-                        if email_type_status == 200:
-                            if email_type == "Order confirmation":
-                                order_details = extract_email_details(body)
-                                if order_details:
-                                    process_order_details(email, date, time, order_details)
-                                else:
-                                    print("No order details extracted from Order email.")
-                            
-                            elif email_type == "Change to order":
-                                order_details = extract_email_details(body)
-                                if order_details:
-                                    process_order_change(email, date, time, order_details)
-                                else:
-                                    print("No order details extracted from Change of Order email.")
-                            
-                            elif email_type == "Complaint":
-                                process_complaint(email, body, date, time)
-                        else:
-                            print(f"Failed to classify email. Status: {email_type_status}")
-                else:
-                    print('❌ Email is NOT valid - Status:', status)
-                    if status == "Suspicious":
-                        print("⚠️ Warning: This email is flagged as suspicious.")
-                    elif status == "Exception":
-                        print("❗ Error: There was an issue validating the email.")
-                    else:
-                        print("ℹ️ Email is invalid or not recognized.")
-    finally:
-        if os.path.exists(changes_file):
-            os.remove(changes_file)
+        print(f"Error in IMAP Monitor: {e}")
 
 def start_monitoring():
-    class ExcelFileHandler(FileSystemEventHandler):
-        def on_modified(self, event):
-            if event.src_path == excel_file_path:
-                print(f"Detected update in file: {excel_file_path}")
-                read_excel_file()
-                handle_modified_file()
-    event_handler = ExcelFileHandler()
-    observer = Observer()
-    observer.schedule(event_handler, directory_to_watch, recursive=False)
-    observer.start()
-    print(f"Monitoring updates in {excel_file_path}...")
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        observer.stop()
-        print("Stopped monitoring.")
-    except OSError as e:
-        if hasattr(e, 'winerror') and e.winerror == 10038:
-            print("Socket error detected. Restarting monitoring...")
-            observer.stop()
-            time.sleep(1)
-            start_monitoring()
-        else:
-            raise
-    finally:
-        observer.join()
+    print("--- 📧 Email Automation Service Started (IMAP Mode) ---")
+    while True:
+        process_new_emails()
+        time.sleep(10)  # Poll every 10 seconds
