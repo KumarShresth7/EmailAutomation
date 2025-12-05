@@ -8,3 +8,4 @@ __pycache__
 /attachments
 /chroma_langchain_db
 *.json
+chroma_native_db

@@ -1,27 +1,53 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+'use client';
 
-export function DashboardCard({ title, value, icon: Icon, trend, className }) {
+import { useState, useCallback } from 'react';
+import CustomerDashboard from '@/components/analytics/CustomerAnalytics';
+import ProductDashboard from '@/components/analytics/ProductAnalytics';
+
+// Simple component defined outside to avoid recreation
+function TabButton({ label, isActive, onClick }: { label: string; isActive: boolean; onClick: () => void }) {
   return (
-    <Card className={cn("overflow-hidden border-border/50 bg-gradient-to-br from-background to-muted/20 transition-all duration-300 hover:shadow-lg hover:border-primary/20", className)}>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
-          {title}
-        </CardTitle>
-        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
-            {Icon && <Icon className="h-4 w-4 text-primary" />}
+    <button 
+      onClick={onClick}
+      className={`px-4 py-2 rounded-lg transition-colors ${
+        isActive ? 'bg-[#00E676] text-black' : 'text-white bg-[#1A1A1A] hover:bg-[#252525]'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+export default function AnalyticsPage() {
+  const [activeTab, setActiveTab] = useState('customer');
+
+  const handleTabChange = useCallback((tab: string) => {
+    setActiveTab(tab);
+  }, []);
+
+  return (
+    <div className="flex min-h-screen bg-[#0A0A0A] w-full">
+      <div className="flex-1 p-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+          <h1 className="text-2xl font-semibold text-white">Analytics Dashboard</h1>
+          <div className="flex gap-4">
+            <TabButton 
+              label="Customer Analysis"
+              isActive={activeTab === 'customer'}
+              onClick={() => handleTabChange('customer')}
+            />
+            <TabButton 
+              label="Product Analysis"
+              isActive={activeTab === 'product'}
+              onClick={() => handleTabChange('product')}
+            />
+          </div>
         </div>
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold tracking-tight">{value}</div>
-        {trend && (
-          <p className="text-xs text-muted-foreground mt-1">
-            <span className={trend > 0 ? "text-emerald-500" : "text-rose-500"}>
-              {trend > 0 ? "+" : ""}{trend}%
-            </span> from last month
-          </p>
-        )}
-      </CardContent>
-    </Card>
+
+        <div className="mt-6">
+          {activeTab === 'customer' ? <CustomerDashboard /> : <ProductDashboard />}
+        </div>
+      </div>
+    </div>
   );
 }
